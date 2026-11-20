@@ -1,0 +1,4 @@
+clang++ main.cpp src/render/window.cpp -O3 -march=native -flto -fuse-ld=lld -DNDEBUG -std=c++20 -Iinclude -static -mwindows -o BlackHole.exe -lglfw3 -lglew32 -lopengl32 -lgdi32 -luser32 -lkernel32 -lshell32 -IRapier/main -IRapier/main/debug
+
+/d/black hole simulation
+cd "/d/black hole simulation"
