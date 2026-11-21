@@ -1,4 +1,3 @@
-// 1. Сначала GLEW, GLFW и базовые заголовки рендера
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include "Rprm.h"
@@ -7,7 +6,6 @@
 #include "src/render/shader.h"
 #include "src/render/camera.h"
 
-// 2. Макросы Nuklear
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_IO
 #define NK_INCLUDE_STANDARD_VARARGS
@@ -18,11 +16,9 @@
 #define NK_IMPLEMENTATION
 #define NK_GLFW_GL3_IMPLEMENTATION
 
-// 3. Подключаем Nuklear
 #include "nuklear.h"
 #include "nuklear_glfw_gl3.h"
 
-// 4. Подключаем консоль отладки с ее точным макросом реализации
 #define SPACE_DEBUG_CONSOLE_IMPLEMENTATION
 #include "debug_console.h"
 
@@ -39,7 +35,6 @@ int main()
 
     glEnable(GL_DEPTH_TEST);
 
-    // ---- Nuklear init ----
     struct nk_glfw glfw = {0};
     struct nk_context *nk = nk_glfw3_init(&glfw, win, NK_GLFW3_INSTALL_CALLBACKS);
 
@@ -47,12 +42,10 @@ int main()
     nk_glfw3_font_stash_begin(&glfw, &atlas);
     nk_glfw3_font_stash_end(&glfw);
 
-    // ---- Debug console ----
     SDC console;
     sdc_init(&console, 128);
     sdc_log(&console, SDC_INFO, "Simulation started");
 
-    // ---- Scene ----
     const Vertex vertices[] = {
         {{-0.6f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
         {{ 0.6f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
@@ -72,6 +65,8 @@ int main()
 
     unsigned long long tick = 0;
     double prev_time = glfwGetTime();
+    double sim_time  = 0.0;    
+    bool   grave_was_down = false;
 
     while (!glfwWindowShouldClose(win))
     {
@@ -80,47 +75,40 @@ int main()
         prev_time  = now;
         double fps = (dt > 0.0) ? 1.0 / dt : 0.0;
 
-        // ---- Nuklear input ----
+        bool grave_down = glfwGetKey(win, GLFW_KEY_GRAVE_ACCENT) == GLFW_PRESS;
+        if (grave_down && !grave_was_down) sdc_toggle(&console);
+        grave_was_down = grave_down;
         nk_glfw3_new_frame(&glfw);
 
-        // ---- Sim tick ----
         if (!sdc_paused(&console)) {
             tick++;
+            sim_time += dt;
         } else if (sdc_step(&console)) {
             tick++;
+            sim_time += 1.0 / 60.0;
         }
 
-        sdc_tick(&console, now, fps, 1, tick);
+        sdc_tick(&console, sim_time, fps, 1, tick);
 
-        // ---- Draw console UI ----
-        {
-            int w = 0, h = 0;
-            glfwGetFramebufferSize(win, &w, &h);
-            sdc_draw(&console, nk, 10.0f, 10.0f, 420.0f, (float)h - 20.0f);
-        }
+        int w = 0, h = 0;
+        glfwGetFramebufferSize(win, &w, &h);
 
-        // ---- 3D render ----
-        {
-            int w = 0, h = 0;
-            glfwGetFramebufferSize(win, &w, &h);
-            if (w == 0 || h == 0) { glfwPollEvents(); continue; }
-            glViewport(0, 0, w, h);
-        }
+        sdc_draw(&console, nk, 10.0f, 10.0f, 420.0f, (float)h - 20.0f);
+
+        if (w == 0 || h == 0) { glfwPollEvents(); continue; }
+        glViewport(0, 0, w, h);
 
         glClearColor(0.05f, 0.05f, 0.08f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        if (!sdc_paused(&console)) {
-            int w = 0, h = 0;
-            glfwGetFramebufferSize(win, &w, &h);
-            Mat4 model = rotate(Vec3(0, 1, 0), now);
+        {
+            Mat4 model = rotate(Vec3(0, 1, 0), sim_time);
             Mat4 mvp   = camera.projection((double)w / h) * camera.view() * model;
             shader.use();
             shader.setMat4("uMVP", mvp);
             triangle.draw();
         }
 
-        // ---- Nuklear render ----
         nk_glfw3_render(&glfw, NK_ANTI_ALIASING_ON, NK_MAX_VERTEX_BUFFER, NK_MAX_ELEMENT_BUFFER);
 
         glfwSwapBuffers(win);

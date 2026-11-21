@@ -20,7 +20,8 @@ typedef struct {
     int              show[4];
     char             filter[64];
     int              autoscroll;
-    nk_uint          scroll;
+    struct nk_scroll scroll;
+    unsigned long long total, seen;   /* entries logged / entries already scrolled to */
 
     double           sim_time, fps;
     unsigned int     body_count;
@@ -30,6 +31,9 @@ typedef struct {
     int              plot_fps_n, plot_fps_head;
 
     int              visible, paused, step;
+
+    char             input[128];
+    int              focus;
 } SDC;
 
 #ifdef __cplusplus
@@ -55,9 +59,17 @@ int  sdc_step   (SDC *c);
 #include <stdio.h>
 #include <string.h>
 
-static const char *sdc__pfx[] = {"[DBG]","[INF]","[WRN]","[ERR]"};
+/*
+ * Commands:
+ *   help                      list commands
+ *   clear                     clear the log
+ *   pause | resume | step     control the simulation
+ *   stats                     print t / tick / fps / bodies
+ *   show <dbg|inf|wrn|err> <on|off>
+ */
+
 static struct nk_color sdc__col[] = {
-    {130,130,130,255}, {180,210,255,255}, {255,210,60,255}, {255,70,70,255}
+    {130,130,130,255}, {215,215,215,255}, {255,210,60,255}, {255,90,90,255}
 };
 
 void sdc_init(SDC *c, int n) {
@@ -67,6 +79,7 @@ void sdc_init(SDC *c, int n) {
     c->show[0]=c->show[1]=c->show[2]=c->show[3]=1;
     c->autoscroll = 1;
     c->visible = 1;
+    c->focus = 1;
 }
 
 void sdc_free(SDC *c) { free(c->buf); c->buf=NULL; }
@@ -78,9 +91,13 @@ void sdc_log(SDC *c, SdcLevel lvl, const char *fmt, ...) {
     va_start(a, fmt); vsnprintf(e->text, SDC_MAX_LINE, fmt, a); va_end(a);
     c->head = (c->head+1) % c->cap;
     if (c->count < c->cap) c->count++;
+    c->total++;
 }
 
-void sdc_clear(SDC *c) { c->head=c->count=0; memset(c->buf,0,c->cap*sizeof(SdcEntry)); }
+void sdc_clear(SDC *c) {
+    c->head = c->count = 0;
+    memset(c->buf, 0, c->cap*sizeof(SdcEntry));
+}
 
 void sdc_tick(SDC *c, double sim_time, double fps, unsigned int bodies, unsigned long long tick) {
     c->sim_time   = sim_time;
@@ -92,12 +109,66 @@ void sdc_tick(SDC *c, double sim_time, double fps, unsigned int bodies, unsigned
     if (c->plot_fps_n < SDC_MAX_PLOTS) c->plot_fps_n++;
 }
 
-void sdc_toggle(SDC *c) { c->visible ^= 1; }
+void sdc_toggle(SDC *c) { c->visible ^= 1; if (c->visible) c->focus = 1; }
 int  sdc_paused(SDC *c) { return c->paused; }
 int  sdc_step  (SDC *c) { if(c->step){c->step=0;return 1;} return 0; }
 
+static int sdc__on(const char *s) { return s && (!strcmp(s,"on") || !strcmp(s,"1")); }
+
+static void sdc__exec(SDC *c, char *line) {
+    char *cmd, *a1, *a2;
+    sdc_log(c, SDC_INFO, "> %s", line);
+
+    cmd = strtok(line, " \t");
+    if (!cmd) return;
+    a1 = strtok(NULL, " \t");
+    a2 = strtok(NULL, " \t");
+
+    if (!strcmp(cmd, "help")) {
+        sdc_log(c, SDC_INFO, "help, hide (or press `), clear, pause, resume, step, stats");
+        sdc_log(c, SDC_INFO, "filter [text], show <dbg|inf|wrn|err> <on|off>, autoscroll <on|off>");
+    } else if (!strcmp(cmd, "hide")) {
+        c->visible = 0;
+    } else if (!strcmp(cmd, "clear")) {
+        sdc_clear(c);
+    } else if (!strcmp(cmd, "pause")) {
+        c->paused = 1;
+    } else if (!strcmp(cmd, "resume")) {
+        c->paused = 0;
+    } else if (!strcmp(cmd, "step")) {
+        if (c->paused) c->step = 1; else sdc_log(c, SDC_WARN, "step: pause first");
+    } else if (!strcmp(cmd, "stats")) {
+        sdc_log(c, SDC_INFO, "t=%.2fs tick=%llu fps=%.0f bodies=%u %s",
+                c->sim_time, c->tick, c->fps, c->body_count, c->paused ? "PAUSED" : "RUN");
+    } else if (!strcmp(cmd, "filter")) {
+        if (a1) { strncpy(c->filter, a1, sizeof(c->filter)-1); c->filter[sizeof(c->filter)-1] = 0; }
+        else c->filter[0] = 0;
+    } else if (!strcmp(cmd, "show")) {
+        int lvl = -1;
+        if (a1 && !strcmp(a1,"dbg")) lvl = 0;
+        else if (a1 && !strcmp(a1,"inf")) lvl = 1;
+        else if (a1 && !strcmp(a1,"wrn")) lvl = 2;
+        else if (a1 && !strcmp(a1,"err")) lvl = 3;
+        if (lvl < 0 || !a2) sdc_log(c, SDC_WARN, "usage: show <dbg|inf|wrn|err> <on|off>");
+        else c->show[lvl] = sdc__on(a2);
+    } else if (!strcmp(cmd, "autoscroll")) {
+        if (!a1) sdc_log(c, SDC_WARN, "usage: autoscroll <on|off>");
+        else c->autoscroll = sdc__on(a1);
+    } else {
+        sdc_log(c, SDC_ERROR, "unknown command: %s", cmd);
+    }
+}
+
+// keep the toggle key out of the input field 
+static int sdc__filter(const struct nk_text_edit *box, nk_rune r) {
+    if (r == '`' || r == '~') return 0;
+    return nk_filter_default(box, r);
+}
+
 void sdc_draw(SDC *c, struct nk_context *nk, float x, float y, float w, float h) {
-    char tmp[128];
+    char tmp[SDC_MAX_LINE + 8];
+    nk_flags ev;
+    float log_h;
     int i;
 
     if (!c->visible) return;
@@ -107,48 +178,39 @@ void sdc_draw(SDC *c, struct nk_context *nk, float x, float y, float w, float h)
             NK_WINDOW_BORDER|NK_WINDOW_MOVABLE|NK_WINDOW_SCALABLE|NK_WINDOW_NO_SCROLLBAR))
     { nk_end(nk); return; }
 
-    /* ---- status bar ---- */
-    nk_layout_row_dynamic(nk, 16, 1);
-    snprintf(tmp, sizeof(tmp),
-        "t=%.2fs  tick=%llu  fps=%.0f  bodies=%u  [%s]",
-        c->sim_time, c->tick, c->fps, c->body_count,
-        c->paused ? "PAUSED" : "RUN");
-    nk_text_colored(nk, tmp, (int)strlen(tmp), NK_TEXT_LEFT, nk_rgb(100,180,100));
+    // log
+    log_h = nk_window_get_content_region_size(nk).y - 38.0f;
+    if (log_h < 30.0f) log_h = 30.0f;
 
-    /* ---- controls ---- */
-    nk_layout_row_begin(nk, NK_STATIC, 20, 8);
-    nk_layout_row_push(nk,52);
-    if (nk_button_label(nk, c->paused?"Resume":"Pause")) c->paused^=1;
-    nk_layout_row_push(nk,40);
-    if (c->paused && nk_button_label(nk,"Step")) c->step=1;
-    nk_layout_row_push(nk,40);
-    if (nk_button_label(nk,"Clear")) sdc_clear(c);
-    nk_layout_row_push(nk,38); c->show[0]=nk_check_label(nk,"DBG",c->show[0]);
-    nk_layout_row_push(nk,34); c->show[1]=nk_check_label(nk,"INF",c->show[1]);
-    nk_layout_row_push(nk,38); c->show[2]=nk_check_label(nk,"WRN",c->show[2]);
-    nk_layout_row_push(nk,38); c->show[3]=nk_check_label(nk,"ERR",c->show[3]);
-    nk_layout_row_push(nk,20); c->autoscroll=nk_check_label(nk,"",c->autoscroll);
-    nk_layout_row_end(nk);
-
-    /* ---- filter ---- */
-    nk_layout_row_dynamic(nk, 18, 1);
-    nk_edit_string_zero_terminated(nk, NK_EDIT_FIELD, c->filter, sizeof(c->filter), nk_filter_default);
-
-    /* ---- log scroll group ---- */
-    nk_layout_row_dynamic(nk, h - 90.0f, 1);
-    if (nk_group_scrolled_begin(nk, (struct nk_scroll*)&c->scroll, "##log",
-            NK_WINDOW_BORDER)) {
+    nk_layout_row_dynamic(nk, log_h, 1);
+    if (nk_group_scrolled_begin(nk, &c->scroll, "##log", NK_WINDOW_BORDER)) {
         int start = (c->count < c->cap) ? 0 : c->head;
+        nk_layout_row_dynamic(nk, 15, 1);
         for (i = 0; i < c->count; i++) {
-            int idx = (start+i) % c->cap;
-            SdcEntry *e = &c->buf[idx];
+            SdcEntry *e = &c->buf[(start+i) % c->cap];
             if (!c->show[e->level]) continue;
             if (c->filter[0] && !strstr(e->text, c->filter)) continue;
-            snprintf(tmp, sizeof(tmp), "%s %s", sdc__pfx[e->level], e->text);
-            nk_layout_row_dynamic(nk, 15, 1);
+            if (e->level == SDC_WARN)       snprintf(tmp, sizeof(tmp), "[WARN] %s", e->text);
+            else if (e->level == SDC_ERROR) snprintf(tmp, sizeof(tmp), "[ERR] %s", e->text);
+            else                            snprintf(tmp, sizeof(tmp), "%s", e->text);
             nk_text_colored(nk, tmp, (int)strlen(tmp), NK_TEXT_LEFT, sdc__col[e->level]);
         }
+        if (c->autoscroll && c->seen != c->total) c->scroll.y = 1000000;
+        c->seen = c->total;
         nk_group_scrolled_end(nk);
+    }
+
+    //input
+    nk_layout_row_dynamic(nk, 26, 1);
+    if (c->focus) { nk_edit_focus(nk, 0); c->focus = 0; }
+    ev = nk_edit_string_zero_terminated(nk, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER,
+                                        c->input, sizeof(c->input), sdc__filter);
+    if ((ev & NK_EDIT_COMMITED) && c->input[0]) {
+        char line[sizeof(c->input)];
+        memcpy(line, c->input, sizeof(line));
+        c->input[0] = 0;
+        c->focus = 1;
+        sdc__exec(c, line);
     }
 
     nk_end(nk);
