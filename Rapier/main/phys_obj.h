@@ -1,5 +1,5 @@
 #include "Rprm.h"
-//aaa l fsd asd
+
 const double G = 6.67430e-20;
 const double c = 300000; // 300 000 km/sec
 
