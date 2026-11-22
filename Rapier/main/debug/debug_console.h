@@ -140,9 +140,6 @@ static void sdc__exec(SDC *c, char *line) {
     } else if (!strcmp(cmd, "stats")) {
         sdc_log(c, SDC_INFO, "t=%.2fs tick=%llu fps=%.0f bodies=%u %s",
                 c->sim_time, c->tick, c->fps, c->body_count, c->paused ? "PAUSED" : "RUN");
-    } else if (!strcmp(cmd, "filter")) {
-        if (a1) { strncpy(c->filter, a1, sizeof(c->filter)-1); c->filter[sizeof(c->filter)-1] = 0; }
-        else c->filter[0] = 0;
     } else if (!strcmp(cmd, "show")) {
         int lvl = -1;
         if (a1 && !strcmp(a1,"dbg")) lvl = 0;
@@ -151,9 +148,6 @@ static void sdc__exec(SDC *c, char *line) {
         else if (a1 && !strcmp(a1,"err")) lvl = 3;
         if (lvl < 0 || !a2) sdc_log(c, SDC_WARN, "usage: show <dbg|inf|wrn|err> <on|off>");
         else c->show[lvl] = sdc__on(a2);
-    } else if (!strcmp(cmd, "autoscroll")) {
-        if (!a1) sdc_log(c, SDC_WARN, "usage: autoscroll <on|off>");
-        else c->autoscroll = sdc__on(a1);
     } else {
         sdc_log(c, SDC_ERROR, "unknown command: %s", cmd);
     }
