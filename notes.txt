@@ -4,3 +4,4 @@ clang++ main.cpp src/render/window.cpp -O3 -march=native -flto -fuse-ld=lld -DND
 cd "/d/black hole simulation"
 
 clang++ -std=c++17 -O2 -static -DGLEW_STATIC main.cpp src/render/window.cpp -Iinclude -IRapier/main -IRapier/main/debug -o BlackHole.exe -mwindows -lglfw3 -lglew32 -lopengl32 -lgdi32
+clang++ -std=c++17 -O2 -static -DGLEW_STATIC main.cpp src/render/window.cpp -Ilib -IRapier/main -IRapier/main/debug -Isrc/render/mesh -o BlackHole.exe -mwindows -lglfw3 -lglew32 -lopengl32 -lgdi32
